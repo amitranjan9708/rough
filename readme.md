@@ -1,6 +1,6 @@
 # Referral Network System - Mercor Challenge Solution
 
-## Database Design (ER Diagram)
+## Database Design Overview
 
 ```mermaid
 erDiagram
@@ -36,88 +36,77 @@ erDiagram
         int bonus_amount
         timestamp created_at
     }
-    
-    DAILY_STATISTICS {
-        varchar simulation_id FK
-        int day_number
-        int cumulative_referrals
-        int active_referrers
-        decimal expected_referrals
-    }
 
     USERS ||--o{ REFERRALS : "refers"
     USERS ||--|| USER_METRICS : "has"
     SIMULATION_RUNS ||--o{ DAILY_STATISTICS : "tracks"
 ```
 
-## Overview
+## Project Overview
 
-I'm implementing a referral network system for the Mercor coding challenge. The problem has 5 parts that build on each other - starting with a basic graph and ending with business optimization.
+I'm solving the Mercor referral network challenge - 5 interconnected parts that build from basic graph operations to business optimization. Each part taught me something new about algorithms and system design.
 
 ---
 
 # Part 1: Basic Referral Graph
 
-## My Approach
+## My Approach & Thinking
 
-First I needed to figure out how to store the referral relationships. I considered a few options:
+**The Problem**: Store referral relationships with 3 strict constraints
+- No self-referrals (obvious)
+- Unique referrer per person (business rule)
+- No cycles (maintain hierarchy)
 
-- **Adjacency Matrix**: Would be O(V²) space which is too much for large networks
-- **Simple Adjacency List**: Good space complexity but checking constraints would be slow
-- **My Choice**: Adjacency list + reverse mapping for fast constraint checking
+**My Thought Process**:
+1. First instinct: adjacency matrix? No - O(V²) space is wasteful for sparse networks
+2. Simple adjacency list? Good for space but constraint checking would be expensive
+3. **Key insight**: Use dual data structures - one optimized for storage, one for constraints
 
+**Solution Design**:
+- Main graph: `adjacency_list[referrer] = {candidates}`
+- Constraint helper: `referred_by[candidate] = referrer`
+- Validation strategy: fail-fast with increasing cost (O(1) → O(1) → O(V+E))
+
+### Core Implementation
 ```cpp
 class ReferralNetwork {
-private:
-    // Main storage: who refers whom
     std::unordered_map<std::string, std::unordered_set<std::string>> graph;
+    std::unordered_map<std::string, std::string> referred_by;  // the key insight
     
-    // For quick constraint checking: who referred this person
-    std::unordered_map<std::string, std::string> referred_by;
+    bool addReferral(const std::string& referrer, const std::string& candidate) {
+        if (referrer == candidate) return false;              // cheap check first
+        if (referred_by.count(candidate)) return false;       // O(1) constraint
+        if (wouldCreateCycle(referrer, candidate)) return false; // expensive last
+        
+        // safe to add
+        graph[referrer].insert(candidate);
+        referred_by[candidate] = referrer;
+        return true;
+    }
 };
 ```
 
-## Implementation
-
-The tricky part was enforcing all 3 constraints efficiently:
-
-```cpp
-bool addReferral(const std::string& referrer, const std::string& candidate) {
-    // Easy checks first (fail fast)
-    if (referrer == candidate) return false;  // no self-referrals
-    
-    if (referred_by.count(candidate)) return false;  // unique referrer
-    
-    // This one is expensive - check for cycles
-    if (wouldCreateCycle(referrer, candidate)) return false;
-    
-    // All good, add the referral
-    graph[referrer].insert(candidate);
-    referred_by[candidate] = referrer;
-    return true;
-}
-```
-
-For cycle detection, I used DFS. There might be better ways but this works:
-
-```cpp
-bool wouldCreateCycle(const std::string& from, const std::string& to) {
-    // if adding from->to creates cycle, then there's already a path to->from
-    std::unordered_set<std::string> visited;
-    return dfs(to, from, visited);
-}
-```
+**Why this works**: The reverse mapping gives me O(1) unique referrer checking instead of scanning the entire graph.
 
 ---
 
 # Part 2: Network Reach Analysis
 
-Now I need to calculate the total influence of each user (including indirect referrals).
+## My Approach & Learning
 
-## My Solution
+**The Challenge**: Calculate total influence (direct + indirect referrals)
 
-Used BFS like the problem suggested. I thought about DFS but BFS seems better for this:
+**Initial thinking**: Should I use DFS or BFS? The problem mentioned BFS specifically.
 
+**Why BFS made sense to me**:
+- Better cache locality for wide graphs
+- Natural level-by-level exploration
+- Avoids stack overflow on deep networks
+- Matches how influence actually spreads in real networks
+
+**Algorithm intuition**: Start from a user, explore all their direct referrals, then explore those people's referrals, etc. Keep track of who I've seen to avoid counting twice.
+
+### Key Implementation
 ```cpp
 std::unordered_set<std::string> getFullReach(const std::string& user) {
     std::unordered_set<std::string> reachable;
@@ -131,13 +120,11 @@ std::unordered_set<std::string> getFullReach(const std::string& user) {
         std::string current = q.front();
         q.pop();
         
-        if (graph.count(current)) {
-            for (const std::string& neighbor : graph[current]) {
-                if (!visited.count(neighbor)) {
-                    visited.insert(neighbor);
-                    reachable.insert(neighbor);
-                    q.push(neighbor);
-                }
+        for (const std::string& neighbor : graph[current]) {
+            if (!visited.count(neighbor)) {
+                visited.insert(neighbor);
+                reachable.insert(neighbor);  // this person is reachable
+                q.push(neighbor);             // explore their network too
             }
         }
     }
@@ -145,331 +132,232 @@ std::unordered_set<std::string> getFullReach(const std::string& user) {
 }
 ```
 
-For top k referrers, I just calculate everyone's reach and sort:
+**For top-k referrers**: Just calculate everyone's reach and sort. Not the most efficient but straightforward and works fine for reasonable network sizes.
 
-```cpp
-std::vector<std::pair<std::string, int>> getTopReferrers(int k) {
-    std::vector<std::pair<std::string, int>> results;
-    
-    for (const auto& [user, _] : graph) {
-        int reach = getFullReach(user).size();
-        results.push_back({user, reach});
-    }
-    
-    sort(results.begin(), results.end(), 
-         [](const auto& a, const auto& b) { return a.second > b.second; });
-    
-    if (k < results.size()) results.resize(k);
-    return results;
-}
-```
-
-**Choosing k**: For small teams maybe k=3-5, larger orgs could use k=10-20. Depends on what you're trying to analyze.
+**Choosing k**: Depends on what you're analyzing - small teams (k=3-5), medium orgs (k=10-20), large analysis (k=100+).
 
 ---
 
 # Part 3: Finding Real Influencers
 
-Total reach isn't enough - sometimes you want different things.
+## My Approach & Insights
 
-## Metric 1: Unique Reach (Greedy Algorithm)
+**The realization**: Total reach isn't always what you want. Sometimes you need more sophisticated metrics.
 
-This is for when you want to minimize overlap, like for marketing campaigns.
+### Metric 1: Unique Reach Expansion
+
+**Business scenario I imagined**: Marketing team has budget for 3 influencers. Want to reach maximum unique people with minimal overlap.
+
+**My approach**: This is basically the "set cover" problem which is NP-hard, so I used a greedy approximation.
+
+**Algorithm intuition**:
+1. Pre-compute everyone's total reach
+2. Pick the person who covers the most new people
+3. Update "already covered" set
+4. Repeat until k people selected
 
 ```cpp
-std::vector<std::pair<std::string, int>> getUniqueReachExpansion(int k) {
-    // First compute everyone's reach
-    std::unordered_map<std::string, std::unordered_set<std::string>> all_reaches;
-    for (const auto& [user, _] : graph) {
-        all_reaches[user] = getFullReach(user);
-    }
+// Core greedy logic
+for (int i = 0; i < k; i++) {
+    int max_new = 0;
+    std::string best_user;
     
-    std::unordered_set<std::string> already_covered;
-    std::vector<std::pair<std::string, int>> result;
-    
-    for (int i = 0; i < k; i++) {
-        std::string best_user;
-        int max_new = 0;
+    for (const auto& [user, reach] : all_reaches) {
+        if (already_selected(user)) continue;
         
-        for (const auto& [user, reach] : all_reaches) {
-            // skip if already selected
-            bool skip = false;
-            for (const auto& selected : result) {
-                if (selected.first == user) {
-                    skip = true;
-                    break;
-                }
-            }
-            if (skip) continue;
-            
-            // count new people this user would add
-            int new_count = 0;
-            for (const std::string& person : reach) {
-                if (!already_covered.count(person)) {
-                    new_count++;
-                }
-            }
-            
-            if (new_count > max_new) {
-                max_new = new_count;
-                best_user = user;
-            }
+        int new_count = 0;
+        for (const std::string& person : reach) {
+            if (!already_covered.count(person)) new_count++;
         }
         
-        if (max_new > 0) {
-            result.push_back({best_user, max_new});
-            // update covered set
-            for (const std::string& person : all_reaches[best_user]) {
-                already_covered.insert(person);
-            }
+        if (new_count > max_new) {
+            max_new = new_count;
+            best_user = user;
         }
     }
-    return result;
+    // select best_user and update covered set
 }
 ```
 
-This is a greedy approximation for the set cover problem. Not optimal but good enough.
+**Why greedy works**: Gets about 63% of optimal solution, which is good enough for practical use.
 
-## Metric 2: Flow Centrality
+### Metric 2: Flow Centrality
 
-This finds users who are "bridges" in the network.
+**Business scenario**: HR wants to know which employees are "critical bridges" - people whose departure would fragment the network.
+
+**My understanding**: A person is important if they lie on many shortest paths between other people. They're like critical intersections in a road network.
+
+**Algorithm approach**:
+1. Compute shortest distances between all pairs (BFS from each node)
+2. For each person, count how many shortest paths go through them
+3. Higher count = more critical
 
 ```cpp
-std::vector<std::pair<std::string, double>> getFlowCentrality() {
-    std::vector<std::string> users = getAllUsers();
-    
-    // compute shortest distances between all pairs
-    std::unordered_map<std::string, std::unordered_map<std::string, int>> dist;
-    for (const std::string& u : users) {
-        dist[u] = bfsDistances(u);
-    }
-    
-    std::vector<std::pair<std::string, double>> centrality;
-    for (const std::string& v : users) {
-        double score = 0;
-        
-        for (const std::string& s : users) {
-            for (const std::string& t : users) {
-                if (s != t && s != v && t != v) {
-                    // check if v is on shortest path from s to t
-                    if (dist[s][v] + dist[v][t] == dist[s][t]) {
-                        score++;
-                    }
-                }
+// Key insight: v is on shortest path from s to t if:
+// distance(s,v) + distance(v,t) == distance(s,t)
+for (const std::string& s : users) {
+    for (const std::string& t : users) {
+        if (s != t && s != v && t != v) {
+            if (dist[s][v] + dist[v][t] == dist[s][t]) {
+                score++;  // v is a bridge between s and t
             }
         }
-        centrality.push_back({v, score});
     }
-    
-    sort(centrality.begin(), centrality.end(),
-         [](const auto& a, const auto& b) { return a.second > b.second; });
-    
-    return centrality;
 }
 ```
 
-## When to Use Each Metric
+### When to Use Each Metric
 
-**Total Reach**: Good for commission structures. Like if a sales director gets a cut from everyone in their tree.
+**Total Reach**: Commission structures - sales director gets cut from entire tree
 
-**Unique Reach**: For marketing campaigns where you don't want overlap. Pick 3 influencers to reach max unique people.
+**Unique Reach**: Marketing campaigns - pick influencers to reach max unique people  
 
-**Flow Centrality**: For risk management. These are people whose departure would hurt the network the most.
+**Flow Centrality**: Risk management - identify people whose departure hurts network most
 
 ---
 
-# Part 4: Network Growth Simulation
+# Part 4: Growth Simulation
 
-This part was tricky - modeling how the network grows over time.
+## My Approach & Challenges
 
-## My Understanding
+**The new challenge**: Move from static analysis to dynamic modeling. This was the hardest part for me.
 
-- Start with 100 active users
-- Each can refer up to 10 people total
-- Each day, active users have probability p of making a referral
-- Need to track cumulative expected referrals
+**Understanding the model**:
+- 100 initial active users
+- Each can make max 10 referrals in their lifetime
+- Each day: active users have probability p of making a referral
+- Track cumulative expected referrals over time
 
-## Implementation
+**Key insight**: This is about mathematical expectation, not simulating individual random events.
 
+**My approach**:
+1. Track each user's remaining capacity
+2. Each day: calculate expected referrals = (active users) × p
+3. Update capacities based on expected referrals made
+4. Accumulate the daily expectations
+
+### Core Logic
 ```cpp
-class NetworkSimulation {
-private:
-    struct User {
-        std::string id;
-        int capacity_left;
-        bool active;
-        
-        User(const std::string& user_id) : id(user_id), capacity_left(10), active(true) {}
-    };
-    
-    std::vector<User> users;
-    
-public:
-    std::vector<double> simulate(double p, int days) {
-        // reset simulation
-        users.clear();
-        for (int i = 0; i < 100; i++) {
-            users.push_back(User("user_" + std::to_string(i)));
-        }
-        
-        std::vector<double> cumulative(days);
-        
-        for (int day = 0; day < days; day++) {
-            // count active users
-            int active_count = 0;
-            for (const auto& user : users) {
-                if (user.active && user.capacity_left > 0) {
-                    active_count++;
-                }
-            }
-            
-            double expected_today = active_count * p;
-            
-            if (day == 0) {
-                cumulative[day] = expected_today;
-            } else {
-                cumulative[day] = cumulative[day-1] + expected_today;
-            }
-            
-            // update capacities (this is the tricky part)
-            simulateCapacityUpdate(p);
-        }
-        
-        return cumulative;
-    }
-    
-private:
-    void simulateCapacityUpdate(double p) {
-        for (auto& user : users) {
-            if (user.active && user.capacity_left > 0) {
-                // with probability p, user makes a referral
-                if (shouldMakeReferral(p)) {  // random check or expected value
-                    user.capacity_left--;
-                    if (user.capacity_left == 0) {
-                        user.active = false;
-                    }
-                }
-            }
+for (int day = 0; day < days; day++) {
+    // count users who can still refer
+    int active_count = 0;
+    for (const auto& user : users) {
+        if (user.active && user.capacity_left > 0) {
+            active_count++;
         }
     }
-};
-```
-
-For the days_to_target function, I used binary search:
-
-```cpp
-int days_to_target(double p, int target) {
-    int left = 1, right = 10000;  // reasonable bounds
-    int answer = -1;
     
-    while (left <= right) {
-        int mid = (left + right) / 2;
-        auto result = simulate(p, mid);
-        
-        if (result.back() >= target) {
-            answer = mid;
-            right = mid - 1;
-        } else {
-            left = mid + 1;
-        }
-    }
-    return answer;
+    double expected_today = active_count * p;
+    cumulative[day] = (day == 0) ? expected_today : cumulative[day-1] + expected_today;
+    
+    // update capacities (the tricky part)
+    updateCapacities(p);
 }
 ```
+
+**For days_to_target**: Used binary search since more days = more referrals (monotonic relationship).
+
+**Challenges I faced**: How to update capacities properly? Used expected value approach rather than random simulation.
 
 ---
 
 # Part 5: Bonus Optimization
 
-Final part - find minimum bonus to reach target hires.
+## My Approach & Solution
 
-## My Approach
+**The business problem**: Find minimum bonus (in $10 increments) to reach hiring target.
 
-Since adoption_prob is monotonically increasing, I can use binary search on the bonus amount:
+**Key insights**:
+1. `adoption_prob(bonus)` is monotonically increasing
+2. This makes it perfect for binary search
+3. Can reuse simulation logic from Part 4
 
+**My algorithm**:
+1. Binary search on bonus amount (0 to reasonable upper bound)
+2. For each bonus: get probability, run simulation, check if target reached
+3. Find minimum bonus that achieves target
+
+### Implementation
 ```cpp
 int min_bonus_for_target(int days, int target, 
-                        std::function<double(int)> adoption_prob, 
-                        double eps) {
-    int left = 0, right = 100000;  // $0 to $100k
+                        std::function<double(int)> adoption_prob, double eps) {
+    int left = 0, right = 100000;
     int result = -1;
     
     while (left <= right) {
         int mid = (left + right) / 2;
-        
-        // round to nearest $10
-        int bonus = ((mid + 5) / 10) * 10;
+        int bonus = ((mid + 5) / 10) * 10;  // round to nearest $10
         
         double prob = adoption_prob(bonus);
-        
-        // use simulation from part 4
         auto sim_result = simulate(prob, days);
-        double final_hires = sim_result.back();
         
-        if (final_hires >= target - eps) {
+        if (sim_result.back() >= target - eps) {
             result = bonus;
-            right = mid - 1;
+            right = mid - 1;  // try smaller bonus
         } else {
-            left = mid + 1;
+            left = mid + 1;   // need bigger bonus
         }
     }
-    
     return result;
 }
 ```
 
-**Time Complexity**: O(log(max_bonus) * simulation_time)
+**Time complexity**: O(log(max_bonus) × simulation_time) = O(log(max_bonus) × days)
 
-The simulation part is O(days) so overall it's O(log(max_bonus) * days).
+**Why this works**: Leverages monotonicity + reuses existing simulation infrastructure.
 
 ---
 
-# Testing & Compilation
+# Testing & Results
 
+## Compilation
 ```bash
-# compile everything
 make run
-
-# or manually
-g++ -std=c++17 -Wall -Wextra -O2 -o test referral_network.cpp test_referral_network.cpp
-./test
+# or: g++ -std=c++17 -Wall -Wextra -O2 -o test referral_network.cpp test_referral_network.cpp
 ```
 
-## Quick Tests
-
+## Validation Approach
 ```cpp
-// Part 1
-ReferralNetwork net;
+// Part 1: Constraint testing
 assert(net.addReferral("Alice", "Bob"));
-assert(!net.addReferral("Alice", "Alice"));  // no self referral
+assert(!net.addReferral("Alice", "Alice"));    // no self-referral
+assert(!net.addReferral("Charlie", "Bob"));    // unique referrer
 
-// Part 2  
+// Part 2: Reach calculation  
 int reach = net.getTotalReferralCount("Alice");
 auto top3 = net.getTopReferrers(3);
 
-// Part 3
+// Part 3: Advanced metrics
 auto unique = net.getUniqueReachExpansion(2);
 auto brokers = net.getFlowCentrality();
 
-// Part 4
+// Part 4: Simulation
 NetworkSimulation sim;
 auto growth = sim.simulate(0.1, 30);
-int days = sim.days_to_target(0.1, 500);
+int days_needed = sim.days_to_target(0.1, 500);
 
-// Part 5
+// Part 5: Optimization
 auto adoption = [](int bonus) { return bonus * 0.001; };
 int min_bonus = min_bonus_for_target(30, 200, adoption, 1e-3);
 ```
 
 ---
 
-## Notes & Improvements
+## Reflections & Learning
 
-Some things I could improve if I had more time:
+**What I learned**:
+- Graph algorithms have many real-world applications
+- Constraint enforcement needs careful design
+- Greedy algorithms can be surprisingly effective
+- Mathematical modeling is key for business problems
+- Binary search applies to many optimization problems
 
-- The simulation in Part 4 could be more sophisticated (maybe Monte Carlo?)
-- Flow centrality could be optimized using better algorithms
-- Could add more error checking
-- Database integration would be nice for production
+**What I'd improve**:
+- More sophisticated simulation (Monte Carlo methods)
+- Better flow centrality algorithms for large graphs
+- More error handling and edge cases
+- Database integration for production use
 
-Overall this was a good challenge that covered graphs, algorithms, and business optimization. Each part built nicely on the previous ones. 
+**Most challenging part**: Part 4's simulation modeling - bridging from static algorithms to dynamic systems thinking.
+
+**Most satisfying**: Seeing how each part built on previous ones, especially reusing simulation logic in Part 5. 
