@@ -4,6 +4,35 @@ A comprehensive C++ implementation of a referral network system that manages use
 
 ## Features
 
+### High-Level Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Client Apps   │    │   Analytics     │    │   Admin Panel   │
+│   (Web/Mobile)  │    │   Dashboard     │    │   (Management)  │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────┴─────────────┐
+                    │    API Gateway Layer      │
+                    │  (Load Balancing, Auth)   │
+                    └─────────────┬─────────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │   Referral Service Core   │
+                    │    (Business Logic)       │
+                    └─────────────┬─────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+    ┌─────┴─────┐       ┌─────────┴─────────┐    ┌────────┴────────┐
+    │  Primary  │       │   Analytics       │    │     Cache       │
+    │ Database  │       │   Data Store      │    │    (Redis)      │
+    │ (OLTP)    │       │    (OLAP)         │    │   Hot Metrics   │
+    └───────────┘       └───────────────────┘    └─────────────────┘
+```
+
 ### Part 1: Core Referral Graph
 - **User Management**: Add and track users in the referral network
 - **Referral Relationships**: Create directed referral links between users
